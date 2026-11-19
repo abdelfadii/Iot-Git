@@ -1,0 +1,277 @@
+
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cold Chain Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 30px;
+      background: #f1f5f9;
+      font-family: Arial, sans-serif;
+      color: #0f172a;
+    }
+
+    h1 { margin-bottom: 5px; }
+
+    .subtitle {
+      color: #64748b;
+      margin-bottom: 25px;
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: auto;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 20px;
+    }
+
+    .card, .chart-box {
+      background: white;
+      border-radius: 15px;
+      padding: 25px;
+      box-shadow: 0 3px 12px #0000000d;
+    }
+
+    .label {
+      color: #64748b;
+      font-size: 16px;
+    }
+
+    .value {
+      font-size: 42px;
+      font-weight: bold;
+      margin-top: 15px;
+    }
+
+    .temperature { color: #ef4444; }
+    .humidity { color: #2563eb; }
+
+    .card-date {
+      color: #64748b;
+      font-size: 13px;
+      margin-top: 12px;
+    }
+
+    .chart-box { margin-top: 22px; }
+
+    .chart-container { height: 330px; }
+
+    .status {
+      margin-top: 20px;
+      color: #64748b;
+    }
+
+    @media (max-width: 600px) {
+      .cards { grid-template-columns: 1fr; }
+      body { padding: 15px; }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+
+    <h1>Cold Chain Dashboard</h1>
+    <p class="subtitle">Surveillance IoT en temps réel</p>
+
+    <div class="cards">
+
+      <div class="card">
+        <div class="label">🌡️ Température actuelle</div>
+        <div class="value temperature" id="temp">-- °C</div>
+        <div class="card-date" id="temp-date">
+          En attente de mesure...
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="label">💧 Humidité actuelle</div>
+        <div class="value humidity" id="hum">-- %</div>
+        <div class="card-date" id="hum-date">
+          En attente de mesure...
+        </div>
+      </div>
+
+    </div>
+
+    <div class="chart-box">
+      <h2>Historique des mesures</h2>
+      <div class="chart-container">
+        <canvas id="graphique"></canvas>
+      </div>
+    </div>
+
+    <p class="status" id="status">
+      Connexion au serveur...
+    </p>
+
+  </div>
+
+  <script>
+    const ctx = document.getElementById("graphique");
+
+    const graphique = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: "Température (°C)",
+            data: [],
+            borderColor: "#ef4444",
+            backgroundColor: "#ef444420",
+            tension: 0.3,
+            fill: false
+          },
+          {
+            label: "Humidité (%)",
+            data: [],
+            borderColor: "#2563eb",
+            backgroundColor: "#2563eb20",
+            tension: 0.3,
+            fill: false
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        scales: {
+          y: { beginAtZero: false }
+        }
+      }
+    });
+
+    async function actualiser() {
+      try {
+        const response = await fetch("/api/get", {
+          cache: "no-store"
+        });
+
+        if (!response.ok) {
+          throw new Error("HTTP " + response.status);
+        }
+
+        const result = await response.json();
+
+        // Accepte plusieurs structures de réponse JSON
+        let mesures;
+
+        if (Array.isArray(result)) {
+          mesures = result;
+        } else if (Array.isArray(result.data)) {
+          mesures = result.data;
+        } else if (Array.isArray(result.results)) {
+          mesures = result.results;
+        } else if (Array.isArray(result.mesures)) {
+          mesures = result.mesures;
+        } else if (result && typeof result === "object" &&
+                   result.temp != null && result.hum != null) {
+          mesures = [result];
+        } else {
+          throw new Error("Format JSON non reconnu");
+        }
+
+        // Ignorer les valeurs null et non numériques
+        const valides = mesures.filter(m =>
+          m.temp !== null &&
+          m.hum !== null &&
+          m.temp !== undefined &&
+          m.hum !== undefined &&
+          Number.isFinite(Number(m.temp)) &&
+          Number.isFinite(Number(m.hum))
+        );
+
+        if (valides.length === 0) {
+          document.getElementById("status").textContent =
+            "Aucune mesure valide disponible";
+          return;
+        }
+
+        // Trier par date puis par ID si nécessaire
+        valides.sort((a, b) => {
+          const dateA = Date.parse(a.dt);
+          const dateB = Date.parse(b.dt);
+
+          if (Number.isFinite(dateA) && Number.isFinite(dateB)) {
+            return dateA - dateB || Number(a.id || 0) - Number(b.id || 0);
+          }
+
+          return Number(a.id || 0) - Number(b.id || 0);
+        });
+
+        // Récupérer la dernière mesure
+        const derniere = valides[valides.length - 1];
+
+        const temperature = Number(derniere.temp);
+        const humidite = Number(derniere.hum);
+
+        // Actualiser les deux cartes
+        document.getElementById("temp").textContent =
+          temperature.toFixed(1) + " °C";
+
+        document.getElementById("hum").textContent =
+          humidite.toFixed(1) + " %";
+
+        // Heure de la dernière mesure
+        const dateMesure = new Date(derniere.dt);
+
+        const heure = Number.isNaN(dateMesure.getTime())
+          ? "Date inconnue"
+          : dateMesure.toLocaleString("fr-FR");
+
+        document.getElementById("temp-date").textContent =
+          "Dernière mesure : " + heure;
+
+        document.getElementById("hum-date").textContent =
+          "Dernière mesure : " + heure;
+
+        // Afficher les 20 dernières mesures
+        const historique = valides.slice(-20);
+
+        graphique.data.labels = historique.map(m => {
+          const date = new Date(m.dt);
+          return Number.isNaN(date.getTime())
+            ? String(m.id || "")
+            : date.toLocaleTimeString("fr-FR");
+        });
+
+        graphique.data.datasets[0].data =
+          historique.map(m => Number(m.temp));
+
+        graphique.data.datasets[1].data =
+          historique.map(m => Number(m.hum));
+
+        graphique.update();
+
+        document.getElementById("status").textContent =
+          "✅ Connecté au serveur | Dernière actualisation : " +
+          new Date().toLocaleTimeString("fr-FR");
+
+      } catch (error) {
+        document.getElementById("status").textContent =
+          "❌ Erreur de connexion : " + error.message;
+      }
+    }
+
+    // Première récupération immédiate
+    actualiser();
+
+    // Actualisation automatique toutes les 5 secondes
+    setInterval(actualiser, 5000);
+  </script>
+
+</body>
+</html>
